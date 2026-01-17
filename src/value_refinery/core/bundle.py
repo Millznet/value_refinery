@@ -56,7 +56,7 @@ def create_bundle(*, run_dir: Path, out_path: Path | None, include_db: bool = Tr
     files: list[Path] = []
 
     # core run artifacts
-    for name in ["run_manifest.json", "report.md"]:
+    for name in ["run_manifest.json", "run_summary.json", "report.md"]:
         p = run_dir / name
         if p.exists() and p.is_file():
             files.append(p)
