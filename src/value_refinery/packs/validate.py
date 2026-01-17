@@ -1,125 +1,109 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
 
-class PackValidationError(ValueError):
-    pass
+_ALLOWED_RULE_KINDS = {"regex", "regex_count_ge"}
+_ALLOWED_REDACTION_KINDS = {"regex"}
 
 
 def _is_str(x: Any) -> bool:
     return isinstance(x, str) and bool(x.strip())
 
 
-def _err(errors: list[str], path: str, msg: str) -> None:
-    errors.append(f"{path}: {msg}")
-
-
-def _compile_regex(errors: list[str], path: str, pat: Any) -> None:
-    if not _is_str(pat):
-        _err(errors, path, "pattern must be a non-empty string")
-        return
-    try:
-        re.compile(str(pat))
-    except re.error as e:
-        _err(errors, path, f"invalid regex: {e}")
-
-
-def validate_pack(cfg: dict) -> None:
-    errors: list[str] = []
+def validate_pack_dict(cfg: dict[str, Any]) -> list[str]:
+    """
+    Returns a list of human-friendly validation errors.
+    Empty list => valid.
+    """
+    errs: list[str] = []
 
     if not isinstance(cfg, dict):
-        raise PackValidationError("pack must be a dict/object")
+        return ["pack must be a mapping/object"]
 
-    # top-level identity
-    if not _is_str(cfg.get("id")):
-        _err(errors, "id", "required string")
-    if not _is_str(cfg.get("version")):
-        _err(errors, "version", "required string")
+    # required top-level fields
+    for k in ("id", "version"):
+        if not _is_str(cfg.get(k)):
+            errs.append(f"missing/invalid top-level '{k}' (must be non-empty string)")
 
-    # defaults
-    defaults = cfg.get("defaults") or {}
-    if not isinstance(defaults, dict):
-        _err(errors, "defaults", "must be an object")
-        defaults = {}
+    defaults = cfg.get("defaults", {})
+    if defaults is not None and not isinstance(defaults, dict):
+        errs.append("defaults must be an object if present")
 
-    ms = defaults.get("min_score", 55)
-    if not isinstance(ms, int) or not (0 <= ms <= 100):
-        _err(errors, "defaults.min_score", "must be int in [0,100]")
+    rubric = cfg.get("rubric", {})
+    if rubric is not None and not isinstance(rubric, dict):
+        errs.append("rubric must be an object if present")
 
-    dbn = defaults.get("db_name")
-    if dbn is not None and (not _is_str(dbn) or not str(dbn).endswith(".duckdb")):
-        _err(errors, "defaults.db_name", "must be a string ending in .duckdb")
+    redaction = cfg.get("redaction", {})
+    if redaction is not None and not isinstance(redaction, dict):
+        errs.append("redaction must be an object if present")
 
-    exts = defaults.get("allowed_exts", [".md", ".txt", ".log", ".jsonl", ".csv"])
-    if not isinstance(exts, list) or not exts:
-        _err(errors, "defaults.allowed_exts", "must be a non-empty list")
-    else:
-        for i, e in enumerate(exts):
-            if not _is_str(e) or not str(e).startswith("."):
-                _err(errors, f"defaults.allowed_exts[{i}]", "must be like '.md'")
+    # defaults checks (soft)
+    if isinstance(defaults, dict):
+        if "min_score" in defaults and not isinstance(defaults["min_score"], int):
+            errs.append("defaults.min_score must be int")
+        if "db_name" in defaults and not _is_str(defaults["db_name"]):
+            errs.append("defaults.db_name must be non-empty string")
+        if "allowed_exts" in defaults:
+            ae = defaults["allowed_exts"]
+            if not isinstance(ae, list) or not all(isinstance(x, str) for x in ae):
+                errs.append("defaults.allowed_exts must be list[str]")
 
-    # rubric rules
-    rubric = cfg.get("rubric") or {}
-    if not isinstance(rubric, dict):
-        _err(errors, "rubric", "must be an object")
-        rubric = {}
+    # rubric checks
+    if isinstance(rubric, dict):
+        if "base_score" in rubric and not isinstance(rubric["base_score"], int):
+            errs.append("rubric.base_score must be int")
+        rules = rubric.get("rules", [])
+        if rules is not None:
+            if not isinstance(rules, list):
+                errs.append("rubric.rules must be a list")
+            else:
+                for i, r in enumerate(rules):
+                    if not isinstance(r, dict):
+                        errs.append(f"rubric.rules[{i}] must be an object")
+                        continue
+                    rid = r.get("id")
+                    kind = r.get("kind")
+                    if not _is_str(rid):
+                        errs.append(f"rubric.rules[{i}].id must be non-empty string")
+                    if kind not in _ALLOWED_RULE_KINDS:
+                        errs.append(
+                            f"rubric.rules[{i}].kind must be one of {_ALLOWED_RULE_KINDS}"
+                        )
+                    if not isinstance(r.get("weight"), int):
+                        errs.append(f"rubric.rules[{i}].weight must be int")
+                    if not _is_str(r.get("reason")):
+                        errs.append(f"rubric.rules[{i}].reason must be non-empty string")
 
-    rules = rubric.get("rules") or []
-    if not isinstance(rules, list):
-        _err(errors, "rubric.rules", "must be a list")
-        rules = []
+                    # kind-specific
+                    if kind in {"regex", "regex_count_ge"}:
+                        if not _is_str(r.get("pattern")):
+                            errs.append(f"rubric.rules[{i}].pattern must be non-empty string")
+                    if kind == "regex_count_ge":
+                        if not isinstance(r.get("threshold"), int):
+                            errs.append(f"rubric.rules[{i}].threshold must be int")
 
-    allowed_kinds = {"regex", "regex_count_ge"}
-    for i, r in enumerate(rules):
-        path = f"rubric.rules[{i}]"
-        if not isinstance(r, dict):
-            _err(errors, path, "must be an object")
-            continue
-        if not _is_str(r.get("id")):
-            _err(errors, f"{path}.id", "required string")
-        kind = r.get("kind")
-        if kind not in allowed_kinds:
-            _err(errors, f"{path}.kind", f"must be one of {sorted(allowed_kinds)}")
-            continue
+    # redaction checks
+    if isinstance(redaction, dict):
+        reds = redaction.get("redactions", [])
+        if reds is not None:
+            if not isinstance(reds, list):
+                errs.append("redaction.redactions must be a list")
+            else:
+                for i, rr in enumerate(reds):
+                    if not isinstance(rr, dict):
+                        errs.append(f"redaction.redactions[{i}] must be an object")
+                        continue
+                    if not _is_str(rr.get("id")):
+                        errs.append(f"redaction.redactions[{i}].id must be non-empty string")
+                    kind = rr.get("kind")
+                    if kind not in _ALLOWED_REDACTION_KINDS:
+                        errs.append(
+                            f"redaction.redactions[{i}].kind must be one of {_ALLOWED_REDACTION_KINDS}"
+                        )
+                    if not _is_str(rr.get("pattern")):
+                        errs.append(f"redaction.redactions[{i}].pattern must be non-empty string")
+                    if "replace" in rr and not isinstance(rr.get("replace"), str):
+                        errs.append(f"redaction.redactions[{i}].replace must be string")
 
-        if not isinstance(r.get("weight"), int) or not (-100 <= int(r["weight"]) <= 100):
-            _err(errors, f"{path}.weight", "must be int in [-100,100]")
-
-        if not _is_str(r.get("reason")):
-            _err(errors, f"{path}.reason", "required string")
-
-        _compile_regex(errors, f"{path}.pattern", r.get("pattern"))
-
-        if kind == "regex_count_ge":
-            thr = r.get("threshold")
-            if not isinstance(thr, int) or thr < 0:
-                _err(errors, f"{path}.threshold", "must be int >= 0")
-
-    # redactions
-    redaction = cfg.get("redaction") or {}
-    if not isinstance(redaction, dict):
-        _err(errors, "redaction", "must be an object")
-        redaction = {}
-
-    reds = redaction.get("redactions") or []
-    if not isinstance(reds, list):
-        _err(errors, "redaction.redactions", "must be a list")
-        reds = []
-
-    for i, r in enumerate(reds):
-        path = f"redaction.redactions[{i}]"
-        if not isinstance(r, dict):
-            _err(errors, path, "must be an object")
-            continue
-        if not _is_str(r.get("id")):
-            _err(errors, f"{path}.id", "required string")
-        if r.get("kind") != "regex":
-            _err(errors, f"{path}.kind", "must be 'regex'")
-        _compile_regex(errors, f"{path}.pattern", r.get("pattern"))
-        if "replace" in r and not isinstance(r.get("replace"), str):
-            _err(errors, f"{path}.replace", "must be a string")
-
-    if errors:
-        raise PackValidationError("Invalid pack config:\n- " + "\n- ".join(errors))
+    return errs
