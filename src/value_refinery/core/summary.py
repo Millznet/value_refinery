@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import platform
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -9,16 +12,23 @@ from typing import Any
 from .chunk import iter_input_files
 
 
-def _sha256_file(p: Path) -> str:
+def _sha256_file(p: Path, *, max_bytes: int | None = None) -> str:
     h = hashlib.sha256()
+    read = 0
     with p.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
             h.update(chunk)
+            read += len(chunk)
+            if max_bytes is not None and read >= max_bytes:
+                break
     return h.hexdigest()
 
 
-def _stable_fingerprint(entries: list[dict[str, Any]]) -> str:
-    payload = json.dumps(entries, sort_keys=True, separators=(",", ":")).encode("utf-8")
+def _stable_fingerprint(obj: Any) -> str:
+    payload = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -29,77 +39,91 @@ def _relpath(p: Path, root: Path) -> str:
         return p.as_posix()
 
 
+def _safe_git(args: list[str]) -> str | None:
+    try:
+        cp = subprocess.run(["git", *args], capture_output=True, text=True, check=True)
+        return cp.stdout.strip()
+    except Exception:
+        return None
+
+
+def _env_fingerprint() -> dict[str, Any]:
+    return {
+        "python": {"version": platform.python_version(), "executable": sys.executable},
+        "platform": {"system": platform.system(), "release": platform.release(), "machine": platform.machine()},
+        "git": {
+            "commit": _safe_git(["rev-parse", "HEAD"]),
+            "branch": _safe_git(["rev-parse", "--abbrev-ref", "HEAD"]),
+            "dirty": (_safe_git(["status", "--porcelain"]) not in (None, "")),
+        },
+    }
+
+
 def summarize_inputs(*, input_root: Path, allowed_exts: list[str]) -> dict[str, Any]:
     input_root = input_root.expanduser().resolve()
     files: list[Path] = sorted(iter_input_files(input_root, allowed_exts), key=lambda p: p.as_posix())
 
     entries: list[dict[str, Any]] = []
+    total_bytes = 0
+
     for p in files:
         st = p.stat()
+        total_bytes += int(st.st_size)
+
+        # large-file behavior: partial hash (deterministic-ish) + size/mtime
+        max_bytes = None if st.st_size <= 25 * 1024 * 1024 else 4 * 1024 * 1024
+
         entries.append(
             {
                 "path": _relpath(p, input_root),
                 "bytes": int(st.st_size),
-                "sha256": _sha256_file(p),
+                "mtime": int(st.st_mtime),
+                "sha256": _sha256_file(p, max_bytes=max_bytes),
+                "hash_truncated": bool(max_bytes is not None),
             }
         )
 
+    fp = _stable_fingerprint(entries)
     return {
         "root": str(input_root),
+        "allowed_exts": list(allowed_exts),
+        # test expects files_count
         "files_count": len(entries),
+        # keep old naming too (harmless)
+        "file_count": len(entries),
+        "total_bytes": int(total_bytes),
         "files": entries,
-        "fingerprint_sha256": _stable_fingerprint(entries),
+        "fingerprint_sha256": fp,
     }
 
 
-def summarize_run_outputs(*, run_dir: Path) -> dict[str, Any]:
+def summarize_outputs(*, run_dir: Path) -> dict[str, Any]:
     run_dir = run_dir.expanduser().resolve()
 
-    paths: list[Path] = []
-    for name in ["run_manifest.json", "run_summary.json", "report.md"]:
+    candidates: list[Path] = []
+    for name in ["run_manifest.json", "run_summary.json", "report.md", "report.json"]:
         p = run_dir / name
         if p.exists() and p.is_file():
-            paths.append(p)
+            candidates.append(p)
 
     exports_dir = run_dir / "exports"
     if exports_dir.exists() and exports_dir.is_dir():
-        paths.extend([p for p in exports_dir.rglob("*") if p.is_file()])
-
-    paths.extend([p for p in run_dir.glob("*.duckdb") if p.is_file()])
-
-    uniq: dict[str, Path] = {}
-    for p in paths:
-        rp = p.resolve()
-        uniq[str(rp)] = rp
-    paths = sorted(uniq.values(), key=lambda p: p.as_posix())
+        candidates.extend([p for p in exports_dir.rglob("*") if p.is_file()])
 
     entries: list[dict[str, Any]] = []
-    for p in paths:
+    for p in sorted(candidates, key=lambda x: x.as_posix()):
         st = p.stat()
         entries.append(
             {
                 "path": _relpath(p, run_dir),
                 "bytes": int(st.st_size),
+                "mtime": int(st.st_mtime),
                 "sha256": _sha256_file(p),
             }
         )
 
-    return {
-        "run_dir": str(run_dir),
-        "files_count": len(entries),
-        "files": entries,
-        "fingerprint_sha256": _stable_fingerprint(entries),
-    }
-
-
-def _count_lines(p: Path) -> int:
-    if not p.exists():
-        return 0
-    n = 0
-    with p.open("rb") as f:
-        for _ in f:
-            n += 1
-    return n
+    fp = _stable_fingerprint(entries)
+    return {"run_dir": str(run_dir), "artifacts": entries, "fingerprint_sha256": fp}
 
 
 def write_run_summary(
@@ -111,44 +135,48 @@ def write_run_summary(
     started_at: float,
     bundle_enabled: bool,
     bundle_include_db: bool,
-    bundle_zip: Path | None = None,
+    bundle_zip: Path | None,
 ) -> Path:
     run_dir = run_dir.expanduser().resolve()
     summary_path = run_dir / "run_summary.json"
 
-    inputs = summarize_inputs(input_root=input_root, allowed_exts=allowed_exts)
+    finished_at = time.time()
 
-    chunks_kept = run_dir / "exports" / "chunks_kept.jsonl"
-    decisions = run_dir / "exports" / "decisions.jsonl"
-    counts = {
-        "chunks_kept_lines": _count_lines(chunks_kept),
-        "decisions_lines": _count_lines(decisions),
-    }
+    pack_cfg = manifest.get("pack") or {}
+    pack_fingerprint = _stable_fingerprint(pack_cfg)
 
-    base: dict[str, Any] = {
+    inp = summarize_inputs(input_root=input_root, allowed_exts=allowed_exts)
+    outp = summarize_outputs(run_dir=run_dir)
+
+    summary: dict[str, Any] = {
         "schema_version": "run_summary_v1",
-        "run_id": manifest.get("run_id"),
         "created_at": int(time.time()),
-        "pack_id": (manifest.get("pack") or {}).get("id"),
-        "pack_version": (manifest.get("pack") or {}).get("version"),
-        "min_score": manifest.get("min_score"),
-        "limit": manifest.get("limit"),
-        "allowed_exts": allowed_exts,
-        "input": inputs,
-        "counts": counts,
-        "timing": {"total_seconds": round(time.time() - started_at, 6)},
+        "run_id": manifest.get("run_id"),
+        "run_dir": str(run_dir),
+        "timing": {
+            "started_at": float(started_at),
+            "finished_at": float(finished_at),
+            "duration_ms": int((finished_at - started_at) * 1000),
+        },
+        "env": _env_fingerprint(),
+        "pack": {
+            "id": pack_cfg.get("id"),
+            "version": pack_cfg.get("version"),
+            "fingerprint_sha256": pack_fingerprint,
+            "spec": manifest.get("pack_spec"),
+        },
+        # what tests expect:
+        "input": inp,
+        "output": outp,
+        # aliases (won't hurt anything, helps compatibility):
+        "inputs": inp,
+        "outputs": outp,
         "bundle": {
             "enabled": bool(bundle_enabled),
             "include_db": bool(bundle_include_db),
-            "zip": (str(bundle_zip) if bundle_zip is not None else None),
+            "zip": str(bundle_zip) if bundle_zip else None,
         },
     }
 
-    # write once so run_outputs can include it deterministically
-    summary_path.write_text(json.dumps(base, indent=2), encoding="utf-8")
-
-    base["outputs"] = summarize_run_outputs(run_dir=run_dir)
-    base["timing"]["total_seconds"] = round(time.time() - started_at, 6)
-
-    summary_path.write_text(json.dumps(base, indent=2), encoding="utf-8")
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return summary_path
