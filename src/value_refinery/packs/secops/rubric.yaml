@@ -1,0 +1,24 @@
+version: 0.0.1
+base_score: 80
+rules:
+  - id: has_steps
+    kind: regex
+    pattern: "(^|\\n)\\s*\\d+\\)\\s+"
+    weight: 8
+    reason: "structured_steps"
+  - id: has_headings
+    kind: regex
+    pattern: "(^|\\n)#{1,6}\\s+"
+    weight: 6
+    reason: "structured_headings"
+  - id: too_link_heavy
+    kind: regex_count_ge
+    pattern: "https?://"
+    threshold: 5
+    weight: -20
+    reason: "link_heavy"
+  - id: boilerplate_terms
+    kind: regex
+    pattern: "(cookie|newsletter|subscribe)"
+    weight: -10
+    reason: "boilerplate_like"
