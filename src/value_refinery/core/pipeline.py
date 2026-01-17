@@ -8,7 +8,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 
-from .chunk import chunk_markdown, decode_bytes, iter_input_files
+from .chunk import chunk_text, decode_bytes, iter_input_files
 from .db import connect
 from .quality import basic_quality_score
 
@@ -113,6 +113,9 @@ def run_pipeline(
     limit: int,
     show: bool,
     allowed_exts: list[str],
+    max_bytes: int = 0,
+    max_chunk_chars: int = 8000,
+    min_chunk_chars: int = 200,
 ) -> None:
     input = input.expanduser()
     db = db.expanduser()
@@ -150,6 +153,14 @@ def run_pipeline(
     t0 = time.time()
 
     for p in files:
+        if max_bytes and max_bytes > 0:
+            try:
+                st = p.stat()
+                if st.st_size > max_bytes:
+                    console.print(f"[yellow]skip too large[/yellow]: {p} ({st.st_size} bytes)")
+                    continue
+            except Exception:
+                pass
         try:
             data = p.read_bytes()
         except Exception as e:
@@ -179,10 +190,8 @@ def run_pipeline(
         docs_ingested += 1
 
         text = decode_bytes(data)
-        if p.suffix.lower() == ".md":
-            chunks = chunk_markdown(text)
-        else:
-            chunks = [{"path": "", "title": "", "level": 0, "text": text.strip()}]
+        chunks = chunk_text(text, ext=p.suffix.lower(), max_chunk_chars=max_chunk_chars, min_chunk_chars=min_chunk_chars)
+
 
         for c in chunks:
             t = (c.get("text") or "").strip()
