@@ -31,6 +31,7 @@ def run(
     bundle_out: Path | None = None,
     bundle_db: bool = True,
 ) -> None:
+    started_at = time.time()
     cfg = load_pack(pack)
     defaults = (cfg.get("defaults") or {})
     ms = int(min_score if min_score is not None else defaults.get("min_score", 55))
@@ -74,6 +75,20 @@ def run(
 
     paths = export_run(db_path=db_path, run_id=run_id, out_dir=run_dir, min_score=ms)
     rep = write_report(db_path=db_path, run_id=run_id, out_dir=run_dir, min_score=ms)
+    # deterministic run summary (inputs/outputs fingerprints)
+    from .core.summary import write_run_summary
+    summary_path = write_run_summary(
+        run_dir=run_dir,
+        manifest=manifest,
+        input_root=input,
+        allowed_exts=allowed_exts,
+        started_at=started_at,
+        bundle_enabled=bundle,
+        bundle_include_db=bundle_db,
+        bundle_zip=None,
+    )
+    manifest["run_summary"] = str(summary_path)
+
 
     bundle_zip: Path | None = None
     if bundle:
@@ -90,6 +105,20 @@ def run(
     manifest["report"] = str(rep["report_md"])
     if bundle_zip is not None:
         manifest["bundle"] = str(bundle_zip)
+
+    # refresh summary with bundle path (run_dir copy only)
+    if "run_summary" in manifest:
+        from .core.summary import write_run_summary
+        write_run_summary(
+            run_dir=run_dir,
+            manifest=manifest,
+            input_root=input,
+            allowed_exts=allowed_exts,
+            started_at=started_at,
+            bundle_enabled=bundle,
+            bundle_include_db=bundle_db,
+            bundle_zip=bundle_zip,
+        )
 
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
