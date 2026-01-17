@@ -39,9 +39,8 @@ def run(
 
     run_id_base = time.strftime("%Y%m%d_%H%M%S", time.localtime(started_at))
 
-    ms = int((started_at - int(started_at)) * 1000)
-
-    run_id = f"{run_id_base}_{ms:03d}"
+    rid_ms = int((started_at - int(started_at)) * 1000)
+    run_id = f"{run_id_base}_{rid_ms:03d}"
     out = out.expanduser()
     run_dir = out / f"run_{run_id}_{pack}"
     run_dir.mkdir(parents=True, exist_ok=True)
