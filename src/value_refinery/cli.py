@@ -161,5 +161,30 @@ def bundle_cmd(
 ) -> None:
     bundle(run_dir=run_dir, out=out, include_db=include_db)
 
+pack_app = typer.Typer(no_args_is_help=True)
+app.add_typer(pack_app, name="pack")
+
+@pack_app.command("list")
+def pack_list() -> None:
+    from .packs import list_builtin_packs
+    for p in list_builtin_packs():
+        typer.echo(p)
+
+@pack_app.command("validate")
+def pack_validate(
+    pack: str = typer.Argument(..., help="Pack id (builtin) or file path (.yaml/.yml/.json)"),
+) -> None:
+    from .packs import load_pack
+    from .packs.validate import validate_pack_dict
+
+    cfg = load_pack(pack, validate=False)
+    errs = validate_pack_dict(cfg)
+    if errs:
+        for e in errs:
+            typer.echo(f"- {e}")
+        raise typer.Exit(code=2)
+
+    typer.echo("ok")
+
 def main() -> None:
     app()
