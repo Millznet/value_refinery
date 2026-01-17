@@ -37,7 +37,11 @@ def run(
     ms = int(min_score if min_score is not None else defaults.get("min_score", 55))
     allowed_exts = list(defaults.get("allowed_exts", [".md", ".txt", ".log", ".jsonl", ".csv"]))
 
-    run_id = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+    run_id_base = time.strftime("%Y%m%d_%H%M%S", time.localtime(started_at))
+
+    ms = int((started_at - int(started_at)) * 1000)
+
+    run_id = f"{run_id_base}_{ms:03d}"
     out = out.expanduser()
     run_dir = out / f"run_{run_id}_{pack}"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -47,6 +51,7 @@ def run(
 
     manifest: dict = {
         "run_id": run_id,
+        "pack_spec": pack,
         "schema_version": "run_manifest_v1",
         "pack": cfg,
         "input": str(input.expanduser()),
