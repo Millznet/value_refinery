@@ -6,8 +6,8 @@ from typing import Any
 
 import yaml
 
+from .builtins import BUILTIN_PACKS
 from .validate import validate_pack_dict
-
 
 PACKS_DIR = Path(__file__).parent
 
@@ -21,42 +21,38 @@ def _load_pack_file(path: Path) -> dict[str, Any]:
     if not path.exists() or not path.is_file():
         raise FileNotFoundError(f"pack file not found: {path}")
 
-    if path.suffix.lower() in {".yaml", ".yml"}:
+    suf = path.suffix.lower()
+    if suf in {".yaml", ".yml"}:
         cfg = yaml.safe_load(_read_text(path)) or {}
-    elif path.suffix.lower() == ".json":
+    elif suf == ".json":
         cfg = json.loads(_read_text(path))
     else:
         raise ValueError(f"unsupported pack extension: {path.suffix} (use .yaml/.yml/.json)")
 
     if not isinstance(cfg, dict):
-        raise ValueError("pack file must parse to a JSON/YAML object (mapping)")
+        raise ValueError("pack file must parse to an object (mapping)")
     return cfg
 
 
-def _resolve_builtin_pack(spec: str) -> Path | None:
-    # allow "secops" -> packs/secops.yaml (or yml/json)
-    candidates = [
-        PACKS_DIR / f"{spec}.yaml",
-        PACKS_DIR / f"{spec}.yml",
-        PACKS_DIR / f"{spec}.json",
-    ]
-    for p in candidates:
+def _resolve_builtin_pack_file(spec: str) -> Path | None:
+    for ext in (".yaml", ".yml", ".json"):
+        p = PACKS_DIR / f"{spec}{ext}"
         if p.exists() and p.is_file():
             return p
     return None
 
 
 def list_builtin_packs() -> list[str]:
-    out: set[str] = set()
+    out: set[str] = set(BUILTIN_PACKS.keys())
     for p in PACKS_DIR.glob("*.yaml"):
         out.add(p.stem)
     for p in PACKS_DIR.glob("*.yml"):
         out.add(p.stem)
     for p in PACKS_DIR.glob("*.json"):
         out.add(p.stem)
-    # ignore python modules
     out.discard("__init__")
     out.discard("validate")
+    out.discard("builtins")
     return sorted(out)
 
 
@@ -65,34 +61,33 @@ def load_pack(spec: str | Path, *, validate: bool = True) -> dict[str, Any]:
     Load a pack either by builtin id (e.g. "secops") or by file path
     (e.g. "./packs/acme.yaml").
 
-    If validate=True, raises ValueError with a readable message on invalid packs.
+    validate=True => raises ValueError with readable errors.
     """
     path: Path | None = None
 
     if isinstance(spec, Path):
         path = spec
     else:
-        # if it looks like a path or exists on disk, treat as file path
         maybe = Path(spec).expanduser()
-        if maybe.exists():
-            path = maybe
-        elif any(spec.lower().endswith(ext) for ext in (".yaml", ".yml", ".json")):
+        if maybe.exists() or any(spec.lower().endswith(ext) for ext in (".yaml", ".yml", ".json")):
             path = maybe
         else:
-            # builtin id
-            path = _resolve_builtin_pack(spec)
+            path = _resolve_builtin_pack_file(spec)
 
-    if path is None:
-        raise FileNotFoundError(
-            f"unknown pack '{spec}'. builtin={list_builtin_packs()} or pass a file path"
-        )
-
-    cfg = _load_pack_file(path)
+    if path is not None:
+        cfg = _load_pack_file(path)
+    else:
+        # fallback builtins (important for packaged installs that omit YAML)
+        if isinstance(spec, str) and spec in BUILTIN_PACKS:
+            cfg = BUILTIN_PACKS[spec]
+        else:
+            raise FileNotFoundError(
+                f"unknown pack '{spec}'. builtin={list_builtin_packs()} or pass a file path"
+            )
 
     if validate:
         errs = validate_pack_dict(cfg)
         if errs:
-            msg = "invalid pack:\n- " + "\n- ".join(errs)
-            raise ValueError(msg)
+            raise ValueError("invalid pack:\n- " + "\n- ".join(errs))
 
     return cfg
