@@ -15,6 +15,7 @@ from .core.export import export_run
 from .core.report import write_report
 from . import legacy
 
+import os
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 app.add_typer(legacy.app, name="legacy")
 
@@ -167,6 +168,18 @@ def run_cmd(
     bundle: bool = typer.Option(False, "--bundle"),
     bundle_out: Path | None = typer.Option(None, "--bundle-out"),
     bundle_db: bool = typer.Option(True, "--bundle-db/--no-bundle-db"),
+
+
+    exclude: list[str] = typer.Option([], "--exclude", help="Glob pattern to exclude (repeatable)"),
+
+    ignore_file: Path | None = typer.Option(None, "--ignore-file", help="Ignore file override (default: .vrignore under input root)"),
+
+    no_ignore_file: bool = typer.Option(False, "--no-ignore-file", help="Disable .vrignore usage"),
+
+    max_files: int = typer.Option(0, "--max-files", help="Max files to read (0 = unlimited)"),
+
+    max_bytes: int = typer.Option(0, "--max-bytes", help="Max total bytes to read (0 = unlimited)"),
+
 ) -> None:
     run(
         pack=pack,
@@ -222,6 +235,53 @@ def pack_validate(
     from .packs.validate import validate_pack_dict
 
     cfg = load_pack(pack, validate=False)
+
+    # ---- input controls (ignore/exclude/limits) ----
+
+    # core.chunk.iter_input_files reads these env vars
+
+    if exclude:
+
+        os.environ["VR_EXCLUDE"] = "\n".join(exclude)
+
+    else:
+
+        os.environ.pop("VR_EXCLUDE", None)
+
+    if no_ignore_file:
+
+        os.environ["VR_NO_IGNORE_FILE"] = "1"
+
+        os.environ.pop("VR_IGNORE_FILE", None)
+
+    else:
+
+        os.environ.pop("VR_NO_IGNORE_FILE", None)
+
+        if ignore_file is not None:
+
+            os.environ["VR_IGNORE_FILE"] = str(ignore_file)
+
+        else:
+
+            os.environ.pop("VR_IGNORE_FILE", None)
+
+    if max_files:
+
+        os.environ["VR_MAX_FILES"] = str(max_files)
+
+    else:
+
+        os.environ.pop("VR_MAX_FILES", None)
+
+    if max_bytes:
+
+        os.environ["VR_MAX_BYTES"] = str(max_bytes)
+
+    else:
+
+        os.environ.pop("VR_MAX_BYTES", None)
+
     errs = validate_pack_dict(cfg)
     if errs:
         for e in errs:
