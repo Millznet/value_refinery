@@ -181,6 +181,33 @@ def run_cmd(
     max_bytes: int = typer.Option(0, "--max-bytes", help="Max total bytes to read (0 = unlimited)"),
 
 ) -> None:
+    # ---- input controls (ignore/exclude/limits) ----
+    # core.chunk.iter_input_files reads these env vars
+    if exclude:
+        os.environ['VR_EXCLUDE'] = "".join(exclude)
+    else:
+        os.environ.pop('VR_EXCLUDE', None)
+    if no_ignore_file:
+        os.environ['VR_NO_IGNORE_FILE'] = '1'
+        os.environ.pop('VR_IGNORE_FILE', None)
+    else:
+        os.environ.pop('VR_NO_IGNORE_FILE', None)
+        if ignore_file is not None:
+            os.environ['VR_IGNORE_FILE'] = str(ignore_file)
+        else:
+            os.environ.pop('VR_IGNORE_FILE', None)
+
+    if max_files:
+        os.environ['VR_MAX_FILES'] = str(max_files)
+    else:
+        os.environ.pop('VR_MAX_FILES', None)
+
+    if max_bytes:
+        os.environ['VR_MAX_BYTES'] = str(max_bytes)
+    else:
+        os.environ.pop('VR_MAX_BYTES', None)
+    # ---- end input controls ----
+
     run(
         pack=pack,
         input=input,
@@ -235,53 +262,7 @@ def pack_validate(
     from .packs.validate import validate_pack_dict
 
     cfg = load_pack(pack, validate=False)
-
-    # ---- input controls (ignore/exclude/limits) ----
-
-    # core.chunk.iter_input_files reads these env vars
-
-    if exclude:
-
-        os.environ["VR_EXCLUDE"] = "\n".join(exclude)
-
-    else:
-
-        os.environ.pop("VR_EXCLUDE", None)
-
-    if no_ignore_file:
-
-        os.environ["VR_NO_IGNORE_FILE"] = "1"
-
-        os.environ.pop("VR_IGNORE_FILE", None)
-
-    else:
-
-        os.environ.pop("VR_NO_IGNORE_FILE", None)
-
-        if ignore_file is not None:
-
-            os.environ["VR_IGNORE_FILE"] = str(ignore_file)
-
-        else:
-
-            os.environ.pop("VR_IGNORE_FILE", None)
-
-    if max_files:
-
-        os.environ["VR_MAX_FILES"] = str(max_files)
-
-    else:
-
-        os.environ.pop("VR_MAX_FILES", None)
-
-    if max_bytes:
-
-        os.environ["VR_MAX_BYTES"] = str(max_bytes)
-
-    else:
-
-        os.environ.pop("VR_MAX_BYTES", None)
-
+    
     errs = validate_pack_dict(cfg)
     if errs:
         for e in errs:
