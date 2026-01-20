@@ -12,39 +12,124 @@ def decode_bytes(b: bytes) -> str:
 
 def iter_input_files(
     root: Path,
-    allowed_exts: Sequence[str],
-    *,
-    ignore_dirs: Sequence[str] | None = None,
-) -> Iterable[Path]:
+    allowed_exts: list[str] | None = None,
+) -> list[Path]:
     """
-    Yield files under root matching allowed extensions.
+    Enumerate input files under `root`, applying:
+      - built-in default excludes (e.g., .git/, node_modules/, __pycache__/)
+      - optional `.vrignore` in the input root
+      - optional CLI-provided excludes via env var VR_EXCLUDE (newline-separated globs)
+      - optional limits via env vars VR_MAX_FILES / VR_MAX_BYTES
 
-    Notes:
-    - ignore_dirs is a simple name-based filter applied to any path segment.
+    Globs use Path.match semantics (supports **).
+    Matching is against POSIX relative paths (e.g., "dir/file.md").
     """
-    root = root.expanduser()
-    allow = {e.lower() if e.startswith(".") else "." + e.lower() for e in allowed_exts}
+    import os
+    from pathlib import PurePosixPath
 
-    if ignore_dirs is None:
-        ignore_dirs = (".git", ".venv", "__pycache__", "node_modules", "dist", "build")
+    root = Path(root)
 
-    ignore_set = set(ignore_dirs)
+    # defaults (safe + common)
+    patterns: list[str] = [
+        "**/.git/**",
+        "**/node_modules/**",
+        "**/__pycache__/**",
+        "**/.venv/**",
+        "**/venv/**",
+        "**/.pytest_cache/**",
+        "**/.mypy_cache/**",
+        "**/.ruff_cache/**",
+        "**/dist/**",
+        "**/build/**",
+    ]
 
-    if root.is_file():
-        if root.suffix.lower() in allow:
-            yield root
-        return
+    def _load_ignore_file(path: Path) -> list[str]:
+        out: list[str] = []
+        try:
+            txt = path.read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            return out
+        for line in txt.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            # keep it simple for MVP: no negation support yet
+            out.append(line)
+        return out
 
-    if not root.exists():
-        return
+    # ignore-file selection
+    if os.environ.get("VR_NO_IGNORE_FILE") not in ("1", "true", "TRUE", "yes", "YES"):
+        ignore_path = os.environ.get("VR_IGNORE_FILE")
+        if ignore_path:
+            patterns.extend(_load_ignore_file(Path(ignore_path)))
+        else:
+            patterns.extend(_load_ignore_file(root / ".vrignore"))
 
-    for p in root.rglob("*"):
+    # CLI excludes arrive via env var (newline separated)
+    extra = os.environ.get("VR_EXCLUDE", "")
+    for line in extra.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        patterns.append(line)
+
+    # limits
+    def _int_env(name: str) -> int:
+        v = os.environ.get(name, "").strip()
+        if not v:
+            return 0
+        try:
+            return int(v)
+        except Exception:
+            return 0
+
+    max_files = _int_env("VR_MAX_FILES")
+    max_bytes = _int_env("VR_MAX_BYTES")
+
+    def _matches(rel_posix: str) -> bool:
+        rel = PurePosixPath(rel_posix)
+        for pat in patterns:
+            pat = pat.strip()
+            if not pat:
+                continue
+            # allow "/foo/**" anchored style
+            if pat.startswith("/"):
+                pat2 = pat.lstrip("/")
+                if PurePosixPath(rel_posix).match(pat2):
+                    return True
+            if rel.match(pat):
+                return True
+        return False
+
+    files: list[Path] = []
+    for p in sorted(root.rglob("*")):
         if not p.is_file():
             continue
-        if any(part in ignore_set for part in p.parts):
+        if allowed_exts is not None and p.suffix.lower() not in set(e.lower() for e in allowed_exts):
             continue
-        if p.suffix.lower() in allow:
-            yield p
+        rel = p.relative_to(root).as_posix()
+        if _matches(rel):
+            continue
+        files.append(p)
+
+        if max_files and len(files) >= max_files:
+            break
+
+    if max_bytes:
+        out: list[Path] = []
+        total = 0
+        for p in files:
+            try:
+                sz = p.stat().st_size
+            except Exception:
+                sz = 0
+            if total + sz > max_bytes:
+                break
+            out.append(p)
+            total += sz
+        files = out
+
+    return files
 
 
 def _split_by_size(text: str, max_chars: int) -> list[str]:
