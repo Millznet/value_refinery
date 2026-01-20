@@ -36,6 +36,9 @@ def run(
 ) -> None:
     started_at = time.time()
     cfg = load_pack(pack)
+    pack_id = str(cfg.get('id') or 'pack')
+    # pack_spec may be a file path; pack_id is the stable short tag used for naming
+
     defaults = (cfg.get("defaults") or {})
     ms = int(min_score if min_score is not None else defaults.get("min_score", 55))
     allowed_exts = list(defaults.get("allowed_exts", [".md", ".txt", ".log", ".jsonl", ".csv"]))
@@ -45,7 +48,7 @@ def run(
     rid_ms = int((started_at - int(started_at)) * 1000)
     run_id = f"{run_id_base}_{rid_ms:03d}"
     out = out.expanduser()
-    run_dir = out / f"run_{run_id}_{pack}"
+    run_dir = out / f"run_{run_id}_{pack_id}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
     db_name = str(defaults.get("db_name", f"{pack}.duckdb"))
@@ -99,6 +102,11 @@ def run(
 
     bundle_zip: Path | None = None
     if bundle:
+        bundles_dir = out / "bundles"
+        bundles_dir.mkdir(parents=True, exist_ok=True)
+        if bundle_out is None:
+            bundle_out = bundles_dir / f"run_{run_id}_{pack_id}.zip"
+
         from .core.bundle import create_bundle
 
         bundle_target = (bundle_out if bundle_out is not None else (out / "bundles")).expanduser()

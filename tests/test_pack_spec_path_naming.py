@@ -34,7 +34,6 @@ def test_pack_spec_file_path_does_not_pollute_run_dir(tmp_path: Path):
             "0",
             "--limit",
             "0",
-            "--no-show",
             "--bundle",
             "--no-bundle-db",
         ],
@@ -43,7 +42,7 @@ def test_pack_spec_file_path_does_not_pollute_run_dir(tmp_path: Path):
 
     runs = sorted(out.glob("run_*_secops"))
     assert runs, "expected run dir named with pack_id (secops)"
-    assert runs[-1].parent == out, "run dir should be a direct child of out/ (no nested pack path dirs)"
+    assert runs[-1].parent == out, "run dir should be a direct child of out/"
 
     bundles = sorted((out / "bundles").glob("run_*_secops.zip"))
     assert bundles, "expected bundle name run_<id>_secops.zip"
