@@ -15,7 +15,6 @@ from .core.export import export_run
 from .core.report import write_report
 from . import legacy
 
-import os
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 app.add_typer(legacy.app, name="legacy")
 
@@ -212,63 +211,7 @@ app.add_typer(pack_app, name="pack")
 @pack_app.command("list")
 def pack_list() -> None:
     from .packs import list_builtin_packs
-    for p in list_builtin_packs(,
-
-
-    # ---- input controls (ignore/exclude/limits) ----
-
-    # consumed by core.chunk.iter_input_files
-
-    if exclude:
-
-        os.environ['VR_EXCLUDE'] = "\n".join(exclude)
-
-    else:
-
-        os.environ.pop('VR_EXCLUDE', None)
-
-    if ignore_file is not None:
-
-        os.environ['VR_IGNORE_FILE'] = str(ignore_file)
-
-    else:
-
-        os.environ.pop('VR_IGNORE_FILE', None)
-
-    if no_ignore_file:
-
-        os.environ['VR_NO_IGNORE_FILE'] = '1'
-
-    else:
-
-        os.environ.pop('VR_NO_IGNORE_FILE', None)
-
-    if max_files:
-
-        os.environ['VR_MAX_FILES'] = str(max_files)
-
-    else:
-
-        os.environ.pop('VR_MAX_FILES', None)
-
-    if max_bytes:
-
-        os.environ['VR_MAX_BYTES'] = str(max_bytes)
-
-    else:
-
-        os.environ.pop('VR_MAX_BYTES', None)
-
-    exclude: list[str] = typer.Option([], "--exclude", help="Glob pattern to exclude (repeatable)"),
-
-    ignore_file: Path | None = typer.Option(None, "--ignore-file", help="Ignore file path (default: .vrignore under input root)"),
-
-    no_ignore_file: bool = typer.Option(False, "--no-ignore-file", help="Disable .vrignore usage"),
-
-    max_files: int = typer.Option(0, "--max-files", help="Max files to read (0 = unlimited)"),
-
-    max_bytes: int = typer.Option(0, "--max-bytes", help="Max total bytes to read (0 = unlimited)"),
-):
+    for p in list_builtin_packs():
         typer.echo(p)
 
 @pack_app.command("validate")
