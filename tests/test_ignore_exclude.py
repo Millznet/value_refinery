@@ -1,6 +1,5 @@
 from pathlib import Path
 from typer.testing import CliRunner
-
 from value_refinery.cli import app
 
 
@@ -42,9 +41,9 @@ def test_vrignore_excludes_files(tmp_path: Path):
     assert res.exit_code == 0, res.output
 
     run_dir = _latest_run_dir(out)
-    decisions = (run_dir / "exports" / "decisions.jsonl").read_text(encoding="utf-8")
-    assert "secret.md" not in decisions
-    assert "keep.md" in decisions
+    kept = (run_dir / "exports" / "chunks_kept.jsonl").read_text(encoding="utf-8")
+    assert "secret.md" not in kept
+    assert "keep.md" in kept
 
 
 def test_exclude_flag_excludes_files(tmp_path: Path):
@@ -80,6 +79,6 @@ def test_exclude_flag_excludes_files(tmp_path: Path):
     assert res.exit_code == 0, res.output
 
     run_dir = _latest_run_dir(out)
-    decisions = (run_dir / "exports" / "decisions.jsonl").read_text(encoding="utf-8")
-    assert "b.md" not in decisions
-    assert "a.md" in decisions
+    kept = (run_dir / "exports" / "chunks_kept.jsonl").read_text(encoding="utf-8")
+    assert "b.md" not in kept
+    assert "a.md" in kept
