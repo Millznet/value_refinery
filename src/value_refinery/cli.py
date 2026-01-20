@@ -4,7 +4,10 @@ import json
 import time
 from pathlib import Path
 
+from pathlib import Path
+import yaml
 import typer
+
 
 from .packs import load_pack
 from .core import run_pipeline
@@ -221,3 +224,60 @@ def pack_validate(
 
 def main() -> None:
     app()
+
+SAMPLE_MD = """\
+# Sample Notes
+
+## Incident: SSH brute force
+1) Identify affected host(s)
+2) Check auth logs
+3) Rotate credentials
+"""
+
+README_MD = """\
+# Value Refinery
+
+Quick start:
+- Put messy notes in `raw/`
+- Tune the pack in `packs/secops.yaml`
+- Run:
+  value-refinery run --pack packs/secops.yaml --input raw --out artifacts --bundle --no-bundle-db --show
+"""
+
+@app.command("init")
+def init_cmd(
+    dir: Path = typer.Option(Path("."), "--dir", "-d", help="Directory to initialize"),
+    pack: str = typer.Option("secops", "--pack", help="Pack id or path to a pack YAML"),
+    force: bool = typer.Option(False, "--force", help="Overwrite existing files"),
+) -> None:
+    """Initialize a simple project scaffold (raw/, packs/, artifacts/, README)."""
+    base = dir.expanduser().resolve()
+    base.mkdir(parents=True, exist_ok=True)
+
+    raw_dir = base / "raw"
+    packs_dir = base / "packs"
+    artifacts_dir = base / "artifacts"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    packs_dir.mkdir(parents=True, exist_ok=True)
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    sample_path = raw_dir / "sample.md"
+    if sample_path.exists() and not force:
+        typer.echo(f"exists (use --force): {sample_path}")
+        raise typer.Exit(code=2)
+    sample_path.write_text(SAMPLE_MD, encoding="utf-8")
+
+    cfg = load_pack(pack)
+    pack_out = packs_dir / "secops.yaml"
+    if pack_out.exists() and not force:
+        typer.echo(f"exists (use --force): {pack_out}")
+    else:
+        pack_out.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
+
+    readme_path = base / "README.md"
+    if readme_path.exists() and not force:
+        typer.echo(f"exists (use --force): {readme_path}")
+    else:
+        readme_path.write_text(README_MD, encoding="utf-8")
+
+    typer.echo(f"initialized: {base}")
