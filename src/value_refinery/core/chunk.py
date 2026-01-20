@@ -10,6 +10,7 @@ def decode_bytes(b: bytes) -> str:
     return b.decode("utf-8", errors="ignore")
 
 
+
 def iter_input_files(
     root: Path,
     allowed_exts: list[str] | None = None,
@@ -22,26 +23,139 @@ def iter_input_files(
       - optional limits via env vars VR_MAX_FILES / VR_MAX_BYTES
 
     Globs use Path.match semantics (supports **).
-    Matching is against POSIX relative paths (e.g., "dir/file.md").
+    Matching is against POSIX relative paths.
+    Patterns WITHOUT a '/' are treated as basename patterns (match anywhere).
     """
     import os
     from pathlib import PurePosixPath
 
     root = Path(root)
+    if not root.exists():
+        return []
 
-    # defaults (safe + common)
-    patterns: list[str] = [
-        "**/.git/**",
-        "**/node_modules/**",
-        "**/__pycache__/**",
-        "**/.venv/**",
-        "**/venv/**",
-        "**/.pytest_cache/**",
-        "**/.mypy_cache/**",
-        "**/.ruff_cache/**",
-        "**/dist/**",
-        "**/build/**",
-    ]
+    # normalize allowed extensions
+    if allowed_exts:
+        exts = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in allowed_exts}
+    else:
+        exts = None
+
+    # default excluded directories
+    default_excl_dirs = {
+        ".git", ".hg", ".svn",
+        "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+        "node_modules", ".venv", "venv",
+        "dist", "build",
+    }
+
+    def _read_patterns(path: Path) -> list[str]:
+        out: list[str] = []
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                out.append(line)
+        except FileNotFoundError:
+            pass
+        return out
+
+    # ignore file selection
+    patterns: list[str] = []
+    if os.environ.get("VR_NO_IGNORE_FILE") == "1":
+        pass
+    else:
+        ignore_path = os.environ.get("VR_IGNORE_FILE")
+        if ignore_path:
+            patterns += _read_patterns(Path(ignore_path))
+        else:
+            patterns += _read_patterns(root / ".vrignore")
+
+    # CLI excludes via env
+    excl_env = os.environ.get("VR_EXCLUDE", "")
+    if excl_env.strip():
+        for line in excl_env.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            patterns.append(line)
+
+    # limits
+    def _env_int(name: str) -> int:
+        v = os.environ.get(name, "").strip()
+        if not v:
+            return 0
+        try:
+            return int(v)
+        except ValueError:
+            return 0
+
+    max_files = _env_int("VR_MAX_FILES")
+    max_bytes = _env_int("VR_MAX_BYTES")
+
+    total_bytes = 0
+    results: list[Path] = []
+
+    def _matches(rel_posix: PurePosixPath, pat: str) -> bool:
+        # basename pattern: no slash
+        if "/" not in pat:
+            # match against basename only
+            name = PurePosixPath(rel_posix.name)
+            if name.match(pat):
+                return True
+            # also allow matching against rel path for simple cases
+            return rel_posix.match(pat)
+        # path pattern
+        return rel_posix.match(pat)
+
+    def _is_excluded(rel_posix: PurePosixPath) -> bool:
+        for pat in patterns:
+            if _matches(rel_posix, pat):
+                return True
+        return False
+
+    # walk
+    for fp in root.rglob("*"):
+        try:
+            rel = fp.relative_to(root)
+        except Exception:
+            rel = fp.name
+
+        # skip excluded dirs early
+        # (if any parent folder is excluded)
+        parts = rel.parts if hasattr(rel, "parts") else (str(rel),)
+        if any(part in default_excl_dirs for part in parts[:-1]):
+            continue
+
+        if fp.is_dir():
+            continue
+        if fp.is_symlink():
+            continue
+        if not fp.is_file():
+            continue
+
+        rel_posix = PurePosixPath(Path(rel).as_posix())
+        if _is_excluded(rel_posix):
+            continue
+
+        if exts is not None:
+            if fp.suffix.lower() not in exts:
+                continue
+
+        if max_files and len(results) >= max_files:
+            break
+
+        if max_bytes:
+            try:
+                sz = fp.stat().st_size
+            except OSError:
+                continue
+            if total_bytes + sz > max_bytes:
+                break
+            total_bytes += sz
+
+        results.append(fp)
+
+    return sorted(results)
 
     def _load_ignore_file(path: Path) -> list[str]:
         out: list[str] = []
