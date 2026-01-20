@@ -1,11 +1,7 @@
-import json
 from pathlib import Path
-
-import yaml
 from typer.testing import CliRunner
 
 from value_refinery.cli import app
-from value_refinery.core.pack import load_pack
 
 
 def _latest_run_dir(out: Path) -> Path:
@@ -24,17 +20,13 @@ def test_vrignore_excludes_files(tmp_path: Path):
     (raw / "secret.md").write_text("# SECRET\n\npw=123\n", encoding="utf-8")
     (raw / ".vrignore").write_text("secret.md\n", encoding="utf-8")
 
-    cfg = load_pack("secops")
-    pack_path = tmp_path / "secops.yaml"
-    pack_path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
-
     runner = CliRunner()
     res = runner.invoke(
         app,
         [
             "run",
             "--pack",
-            str(pack_path),
+            "secops",
             "--input",
             str(raw),
             "--out",
@@ -64,17 +56,13 @@ def test_exclude_flag_excludes_files(tmp_path: Path):
     (raw / "a.md").write_text("# A\n\n## X\nhello\n", encoding="utf-8")
     (raw / "b.md").write_text("# B\n\n## Y\nworld\n", encoding="utf-8")
 
-    cfg = load_pack("secops")
-    pack_path = tmp_path / "secops.yaml"
-    pack_path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
-
     runner = CliRunner()
     res = runner.invoke(
         app,
         [
             "run",
             "--pack",
-            str(pack_path),
+            "secops",
             "--input",
             str(raw),
             "--out",
