@@ -16,6 +16,42 @@ from .core.report import write_report
 from . import legacy
 
 import os
+
+def _input_controls_from_env() -> dict:
+    """
+    Snapshot input-control env vars used by core.chunk.iter_input_files so the run manifest
+    records what filtering/limits were applied.
+    """
+    import os
+
+    def _int(name: str) -> int:
+        v = (os.environ.get(name) or "").strip()
+        if not v:
+            return 0
+        try:
+            return int(v)
+        except ValueError:
+            return 0
+
+    exclude_raw = os.environ.get("VR_EXCLUDE", "")
+    exclude = []
+    for line in exclude_raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        exclude.append(line)
+
+    ignore_file = os.environ.get("VR_IGNORE_FILE") or None
+    no_ignore_file = os.environ.get("VR_NO_IGNORE_FILE") in ("1", "true", "TRUE", "yes", "YES")
+
+    return {
+        "exclude": exclude,
+        "ignore_file": ignore_file,
+        "no_ignore_file": bool(no_ignore_file),
+        "max_files": _int("VR_MAX_FILES"),
+        "max_bytes": _int("VR_MAX_BYTES"),
+    }
+
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 app.add_typer(legacy.app, name="legacy")
 
@@ -68,6 +104,8 @@ def run(
         "created_at": int(time.time()),
     }
     manifest_path = run_dir / "run_manifest.json"
+    manifest["input_controls"] = _input_controls_from_env()
+
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     run_pipeline(
