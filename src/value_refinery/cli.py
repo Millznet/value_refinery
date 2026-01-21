@@ -222,7 +222,7 @@ def run_cmd(
     # ---- input controls (ignore/exclude/limits) ----
     # core.chunk.iter_input_files reads these env vars
     if exclude:
-        os.environ['VR_EXCLUDE'] = "".join(exclude)
+        os.environ["VR_EXCLUDE"] = "\n".join(exclude)
     else:
         os.environ.pop('VR_EXCLUDE', None)
     if no_ignore_file:
