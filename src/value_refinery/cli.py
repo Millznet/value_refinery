@@ -218,6 +218,10 @@ def run_cmd(
 
     max_bytes: int = typer.Option(0, "--max-bytes", help="Max total bytes to read (0 = unlimited)"),
 
+
+    dry_run: bool = typer.Option(False, "--dry-run", help="Scan input discovery (ignore/exclude/limits) and exit"),
+
+    dry_run_limit: int = typer.Option(50, "--dry-run-limit", help="Max paths to print per category (0 = none)"),
 ) -> None:
     # ---- input controls (ignore/exclude/limits) ----
     # core.chunk.iter_input_files reads these env vars
@@ -245,6 +249,62 @@ def run_cmd(
     else:
         os.environ.pop('VR_MAX_BYTES', None)
     # ---- end input controls ----
+
+    # --dry-run: show file discovery results and exit (no DB/run-dir side effects)
+    if dry_run:
+        from collections import Counter
+        from .core.chunk import scan_input_files
+
+        cfg = load_pack(pack)
+        defaults = (cfg.get("defaults") or {})
+        allowed_exts = list(defaults.get("allowed_exts", [".md", ".txt", ".log", ".jsonl", ".csv"]))
+
+        scan = scan_input_files(input.expanduser(), allowed_exts=allowed_exts)
+        ic = _input_controls_from_env()
+
+        typer.echo("== Value Refinery — dry-run (input discovery) ==")
+        typer.echo(f"pack: {pack} (id={cfg.get('id', pack)})")
+        typer.echo(f"input: {str(Path(scan.get('root') or input).expanduser())}")
+        typer.echo(f"allowed_exts: {allowed_exts}")
+        typer.echo(f"ignore_file_used: {scan.get('ignore_file_used')}")
+        typer.echo(f"no_ignore_file: {scan.get('no_ignore_file')}")
+        typer.echo(f"limits: {scan.get('limits')}")
+        typer.echo(f"patterns: {len(scan.get('patterns') or [])}")
+        if ic.get("exclude"):
+            typer.echo(f"exclude (from env): {ic.get('exclude')}")
+
+        kept = scan.get("kept") or []
+        excl = scan.get("excluded") or []
+        typer.echo(f"kept: {len(kept)}")
+        typer.echo(f"excluded: {len(excl)}")
+        if scan.get("stopped_early"):
+            typer.echo(f"stopped_early: True ({scan.get('stop_reason')})")
+
+        # excluded counts by reason
+        c = Counter([e.get("reason") for e in excl])
+        if c:
+            typer.echo("excluded_by_reason:")
+            for reason, cnt in c.most_common():
+                typer.echo(f"  - {reason}: {cnt}")
+
+        n = int(dry_run_limit) if dry_run_limit else 0
+        if n > 0:
+            typer.echo("")
+            typer.echo(f"kept (first {n}):")
+            for e in kept[:n]:
+                typer.echo(f"  + {e.get('rel')}")
+
+            typer.echo("")
+            typer.echo(f"excluded (first {n}):")
+            for e in excl[:n]:
+                pat = e.get("pattern")
+                if pat:
+                    typer.echo(f"  - {e.get('reason')}: {e.get('rel')}  (pattern={pat})")
+                else:
+                    typer.echo(f"  - {e.get('reason')}: {e.get('rel')}")
+
+        raise typer.Exit(code=0)
+
 
     run(
         pack=pack,
