@@ -222,6 +222,8 @@ def run_cmd(
     dry_run: bool = typer.Option(False, "--dry-run", help="Scan input discovery (ignore/exclude/limits) and exit"),
 
     dry_run_limit: int = typer.Option(50, "--dry-run-limit", help="Max paths to print per category (0 = none)"),
+    dry_run_json: bool = typer.Option(False, "--dry-run-json", help="Emit dry-run scan as JSON to stdout"),
+    dry_run_out: Path | None = typer.Option(None, "--dry-run-out", help="Write dry-run scan JSON to a file"),
 ) -> None:
     # ---- input controls (ignore/exclude/limits) ----
     # core.chunk.iter_input_files reads these env vars
@@ -251,7 +253,7 @@ def run_cmd(
     # ---- end input controls ----
 
     # --dry-run: show file discovery results and exit (no DB/run-dir side effects)
-    if dry_run:
+    if dry_run or dry_run_json or (dry_run_out is not None):
         from collections import Counter
         from .core.chunk import scan_input_files
 
@@ -261,6 +263,25 @@ def run_cmd(
 
         scan = scan_input_files(input.expanduser(), allowed_exts=allowed_exts)
         ic = _input_controls_from_env()
+
+
+        # JSON payload (for tooling/UI)
+        payload = {
+            "pack": {"spec": pack, "id": cfg.get("id", pack), "version": cfg.get("version")},
+            "input": str(Path(scan.get("root") or input).expanduser()),
+            "allowed_exts": allowed_exts,
+            "input_controls": ic,
+            "scan": scan,
+        }
+
+        if dry_run_out is not None:
+            outp = Path(dry_run_out).expanduser()
+            outp.parent.mkdir(parents=True, exist_ok=True)
+            outp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+        if dry_run_json:
+            typer.echo(json.dumps(payload, indent=2))
+            raise typer.Exit(code=0)
 
         typer.echo("== Value Refinery — dry-run (input discovery) ==")
         typer.echo(f"pack: {pack} (id={cfg.get('id', pack)})")
