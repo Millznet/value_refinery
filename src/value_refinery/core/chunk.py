@@ -6,13 +6,14 @@ import re
 from pathlib import Path
 from typing import Iterable, Sequence
 
+from dataclasses import dataclass, field
 def decode_bytes(b: bytes) -> str:
     return b.decode("utf-8", errors="ignore")
 
 
 
 
-def scan_input_files(root: Path, allowed_exts: list[str] | None = None) -> dict:
+def scan_input_files(root: Path, allowed_exts: list[str] | None = None, controls=None) -> dict:
     """
     Debug/inspection helper for CLI --dry-run.
 
@@ -26,6 +27,44 @@ def scan_input_files(root: Path, allowed_exts: list[str] | None = None) -> dict:
     from pathlib import PurePosixPath
 
     root = Path(root)
+
+    # __VR_SCAN_CONTROLS_BOOTSTRAP__
+    if controls is None:
+        import os
+
+        def _int_env(name: str) -> int:
+            v = os.environ.get(name, "").strip()
+            if not v:
+                return 0
+            try:
+                return int(v)
+            except ValueError:
+                return 0
+
+        exclude_raw = os.environ.get("VR_EXCLUDE", "")
+        exclude: list[str] = []
+        for ln in exclude_raw.splitlines():
+            ln = ln.strip()
+            if not ln or ln.startswith("#"):
+                continue
+            exclude.append(ln)
+
+        ignore_file = os.environ.get("VR_IGNORE_FILE") or None
+        no_ignore_file = os.environ.get("VR_NO_IGNORE_FILE") in ("1","true","TRUE","yes","YES")
+
+        # Prefer InputControls.from_env() if it exists; else build a compatible object.
+        try:
+            controls = InputControls.from_env()  # type: ignore[name-defined]
+        except Exception:
+            class _Controls:
+                pass
+            controls = _Controls()
+            controls.exclude = exclude
+            controls.ignore_file = Path(ignore_file) if ignore_file else None
+            controls.no_ignore_file = no_ignore_file
+            controls.max_files = _int_env("VR_MAX_FILES")
+            controls.max_bytes = _int_env("VR_MAX_BYTES")
+
     out: dict = {
         "root": str(root),
         "allowed_exts": allowed_exts or None,
@@ -60,6 +99,10 @@ def scan_input_files(root: Path, allowed_exts: list[str] | None = None) -> dict:
 
     max_files = _int_env("VR_MAX_FILES")
     max_bytes = _int_env("VR_MAX_BYTES")
+
+    if controls is not None:
+        max_files = int(getattr(controls, 'max_files', 0) or 0)
+        max_bytes = int(getattr(controls, 'max_bytes', 0) or 0)
     out["limits"]["max_files"] = max_files
     out["limits"]["max_bytes"] = max_bytes
 
@@ -87,11 +130,15 @@ def scan_input_files(root: Path, allowed_exts: list[str] | None = None) -> dict:
     patterns: list[str] = []
 
     no_ignore = os.environ.get("VR_NO_IGNORE_FILE") in ("1", "true", "TRUE", "yes", "YES")
+    if controls is not None:
+        no_ignore = bool(getattr(controls, 'no_ignore_file', False))
     out["no_ignore_file"] = bool(no_ignore)
 
     ignore_used = None
     if not no_ignore:
         ignore_path = os.environ.get("VR_IGNORE_FILE")
+        if controls is not None:
+            ignore_path = str(getattr(controls, "ignore_file", None)) if getattr(controls, "ignore_file", None) is not None else None
         if ignore_path:
             ignore_used = str(ignore_path)
             patterns.extend(_load_ignore_file(Path(ignore_path)))
@@ -102,6 +149,8 @@ def scan_input_files(root: Path, allowed_exts: list[str] | None = None) -> dict:
     out["ignore_file_used"] = ignore_used
 
     extra = os.environ.get("VR_EXCLUDE", "")
+    if controls is not None:
+        extra = "\n".join(list(getattr(controls, "exclude", []) or []))
     for line in extra.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
@@ -205,9 +254,69 @@ def scan_input_files(root: Path, allowed_exts: list[str] | None = None) -> dict:
     return out
 
 
+@dataclass
+class InputControls:
+    """
+    Input discovery / filtering controls (CLI + programmatic).
+
+    Mirrors the CLI/env behavior:
+      - exclude patterns: newline-separated globs
+      - ignore_file + no_ignore_file
+      - max_files / max_bytes
+    """
+    exclude: list[str] = field(default_factory=list)
+    ignore_file: Path | None = None
+    no_ignore_file: bool = False
+    max_files: int = 0
+    max_bytes: int = 0
+
+    @classmethod
+    def from_env(cls) -> "InputControls":
+        import os
+
+        def _int(name: str) -> int:
+            v = (os.environ.get(name) or "").strip()
+            if not v:
+                return 0
+            try:
+                return int(v)
+            except ValueError:
+                return 0
+
+        # exclude
+        raw = os.environ.get("VR_EXCLUDE", "")
+        ex: list[str] = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            ex.append(line)
+
+        ig = os.environ.get("VR_IGNORE_FILE") or None
+        no_ig = os.environ.get("VR_NO_IGNORE_FILE") in ("1", "true", "TRUE", "yes", "YES")
+
+        return cls(
+            exclude=ex,
+            ignore_file=Path(ig) if ig else None,
+            no_ignore_file=bool(no_ig),
+            max_files=_int("VR_MAX_FILES"),
+            max_bytes=_int("VR_MAX_BYTES"),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "exclude": list(self.exclude or []),
+            "ignore_file": str(self.ignore_file) if self.ignore_file is not None else None,
+            "no_ignore_file": bool(self.no_ignore_file),
+            "max_files": int(self.max_files or 0),
+            "max_bytes": int(self.max_bytes or 0),
+        }
+
+
 def iter_input_files(
     root: Path,
     allowed_exts: list[str] | None = None,
+    controls: InputControls | None = None,
 ) -> list[Path]:
     """
     Enumerate input files under `root`, applying:
