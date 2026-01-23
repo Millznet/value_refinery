@@ -12,6 +12,7 @@ import typer
 from .packs import load_pack
 from .core import run_pipeline
 from .core.export import export_run
+from .core.explain import ExplainFilters, count_by_decision, load_filtered
 from .core.report import write_report
 from . import legacy
 
@@ -338,6 +339,74 @@ def run_cmd(
         bundle_out=bundle_out,
         bundle_db=bundle_db,
     )
+
+
+
+@app.command("explain")
+def explain_cmd(
+    run_dir: Path | None = typer.Option(None, "--run-dir", help="Run directory like data/artifacts/run_..."),
+    decisions: Path | None = typer.Option(None, "--decisions", help="Path to decisions.jsonl (overrides --run-dir)"),
+    decision: list[str] = typer.Option([], "--decision", help="Filter by decision kind (repeatable)"),
+    path: list[str] = typer.Option([], "--path", help="Filter by file path substring (repeatable)"),
+    contains: str = typer.Option("", "--contains", help="Substring filter across JSON"),
+    limit: int = typer.Option(50, "--limit", help="Max matching rows to show (0 = unlimited)"),
+    json_out: bool = typer.Option(False, "--json", help="Emit matching entries as raw JSON lines"),
+) -> None:
+    """
+    Explain why items were kept/dropped/excluded by reading exports/decisions.jsonl.
+    """
+    # resolve decisions path
+    if decisions is not None:
+        dpath = decisions.expanduser()
+    else:
+        if run_dir is None:
+            # default: latest run under data/artifacts/run_*
+            artifacts = Path("data/artifacts")
+            runs = sorted([p for p in artifacts.glob("run_*") if p.is_dir()], key=lambda x: x.stat().st_mtime, reverse=True)
+            if not runs:
+                raise typer.Exit(code=2)
+            run_dir = runs[0]
+        dpath = (run_dir.expanduser() / "exports" / "decisions.jsonl")
+
+    if not dpath.exists():
+        typer.echo(f"missing decisions file: {dpath}")
+        raise typer.Exit(code=2)
+
+    # summary counts (full file)
+    counts = count_by_decision(dpath)
+    if not json_out:
+        typer.echo(f"decisions: {dpath}")
+        typer.echo("counts:")
+        for k in sorted(counts.keys()):
+            typer.echo(f"  - {k}: {counts[k]}")
+
+    flt = ExplainFilters(
+        decisions=tuple(decision),
+        paths=tuple(path),
+        contains=contains or "",
+    )
+    rows = load_filtered(dpath, flt=flt, limit=int(limit))
+
+    if json_out:
+        import json as _json
+        for r in rows:
+            typer.echo(_json.dumps(r, ensure_ascii=False))
+        return
+
+    typer.echo("")
+    typer.echo(f"showing {len(rows)} row(s)")
+    for r in rows:
+        kind = r.get("decision") or r.get("action") or r.get("status") or r.get("kind") or r.get("outcome") or "unknown"
+        fpath = r.get("path") or r.get("rel") or r.get("file") or r.get("source_path") or r.get("input_path") or ""
+        reason = r.get("reason") or r.get("why") or ""
+        score = r.get("score") or r.get("final_score") or r.get("min_score") or None
+        extra = []
+        if score is not None:
+            extra.append(f"score={score}")
+        if reason:
+            extra.append(f"reason={reason}")
+        extras = (" [" + ", ".join(extra) + "]") if extra else ""
+        typer.echo(f"- {kind}: {fpath}{extras}")
 
 
 @app.command("bundle")
