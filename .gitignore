@@ -26,3 +26,4 @@ data/raw/
 
 # local backups
 .bak/
+# local data / runs (keep small samples in /examples)
